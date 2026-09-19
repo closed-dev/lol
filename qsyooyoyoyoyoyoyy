@@ -1,0 +1,1177 @@
+--============================================================
+--  EVENT FARM + AUTO KILL + STREAK FARM (2 cuentas)
+--  Con GUI de WindUI
+--============================================================
+
+local getgenv_ = getgenv or function() return _G end
+
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+--============================================================
+--  CONFIG
+--============================================================
+local Config = {
+    -- Event Farm
+    EventFarmEnabled = false,
+
+    -- Auto Teleport
+    AutoTeleportMain = false,
+    AutoTeleportAlt  = false,
+
+    -- Duelo
+    DuelType    = "1v1",
+    PlatformRow = "Right Platforms",
+
+    -- Break Streak
+    BreakStreakEnabled = false,
+    BreakStreakTarget  = 1,
+
+    -- Lower KD
+    LowerKDEnabled = false,
+    LowerKDTarget  = 4,
+
+    -- Auto Kill All
+    KillAllEnabled   = false,
+    KillAllKeepOn    = false,
+    KillAllCooldown  = 0.1,
+    KillAllRange     = 500,
+    KillAllRequireLOS= false,
+
+    -- ⭐ STREAK FARM (NUEVO)
+    StreakFarmEnabled   = false,
+    StreakFarmRole      = "off",       -- "off" / "farmer" / "victim"
+    StreakFarmAutoKill  = true,        -- Si es farmer, activa Kill All
+    StreakFarmMaxKills  = 0,           -- 0 = infinito, sino corta al llegar
+    StreakFarmLobbyWait = 3,           -- Segundos entre rondas
+    StreakFarmSide      = "Right",     -- "Right" / "Left"
+}
+
+local WhitelistUserIds = {
+    8343463328,
+}
+
+--============================================================
+--  SERVICIOS
+--============================================================
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local LocalPlayer      = Players.LocalPlayer
+
+--============================================================
+--  ANTI-TAMPER
+--============================================================
+local CleanupKey = "__evt_kx"
+local GenKey     = "__evt_gn"
+local GenCounter = 1
+
+pcall(function()
+    local genv = getgenv_()
+    if type(genv[CleanupKey]) == "function" then genv[CleanupKey]() end
+    GenCounter = (tonumber(genv[GenKey]) or 0) + 1
+    genv[GenKey] = GenCounter
+end)
+
+local function IsValidGen()
+    local ok, cur = pcall(function() return getgenv_()[GenKey] end)
+    if not ok then return true end
+    return cur == nil or cur == GenCounter
+end
+
+--============================================================
+--  UTILIDADES
+--============================================================
+local function GetHRP(player)
+    local char = player and player.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+        or char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Torso")
+        or char:FindFirstChild("Head")
+    if hrp and hrp:IsA("BasePart") then return hrp end
+    return nil
+end
+
+local function IsAlive(player)
+    local char = player and player.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    return hum ~= nil and hum.Health > 0
+end
+
+local function hasAttr(inst, name)
+    if not inst then return false end
+    local val = inst:GetAttribute(name)
+    return typeof(val) == "string" and val ~= ""
+end
+
+local function hasGameAndMap(player)
+    return hasAttr(player, "Game") and hasAttr(player, "Map")
+end
+
+local function isWhitelisted(player)
+    for _, id in ipairs(WhitelistUserIds) do
+        if player.UserId == id then return true end
+    end
+    return false
+end
+
+--============================================================
+--  ENEMY CHECKER
+--============================================================
+local EnemyChecker = {}
+function EnemyChecker:isEnemy(player)
+    if player == LocalPlayer then return false end
+    if isWhitelisted(player) then return false end
+    if not hasGameAndMap(LocalPlayer) or not hasGameAndMap(player) then return false end
+    if LocalPlayer:GetAttribute("Game") ~= player:GetAttribute("Game") then return false end
+    if LocalPlayer:GetAttribute("Map")  ~= player:GetAttribute("Map")  then return false end
+    local myTeam  = LocalPlayer:GetAttribute("Team")
+    local hisTeam = player:GetAttribute("Team")
+    if typeof(myTeam) ~= "string" or myTeam == "" then return false end
+    if typeof(hisTeam) ~= "string" or hisTeam == "" then return false end
+    return myTeam ~= hisTeam
+end
+
+--============================================================
+--  RAYCAST
+--============================================================
+local cachedRayParams, cachedRayParamsChar = nil, false
+local function GetRayParams(char)
+    if cachedRayParams and cachedRayParamsChar == char then return cachedRayParams end
+    local rp = cachedRayParams
+    if not rp then
+        rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.IgnoreWater = true
+        cachedRayParams = rp
+    end
+    rp.FilterDescendantsInstances = char and { char } or {}
+    cachedRayParamsChar = char
+    return rp
+end
+
+local function CanSee(player, part)
+    local myChar  = LocalPlayer.Character
+    local myHRP   = GetHRP(LocalPlayer)
+    local hisChar = player and player.Character
+    if not (myChar and myHRP and hisChar and part and part:IsA("BasePart")) then return false end
+    local delta = part.Position - myHRP.Position
+    if delta.Magnitude <= 0 then return false end
+    local hit = workspace:Raycast(myHRP.Position, delta, GetRayParams(myChar))
+    return (not hit) or (hit.Instance and hit.Instance:IsDescendantOf(hisChar))
+end
+
+--============================================================
+--  REMOTES
+--============================================================
+local function getRemotes()
+    local packages = ReplicatedStorage:FindFirstChild("Packages")
+    local net = packages and packages:FindFirstChild("Networking")
+    return net
+end
+
+local function getKnifeKillRemote()
+    local net = getRemotes()
+    if not net then return nil end
+    local rf = net:FindFirstChild("RE/Combat/KnifeKill")
+    if rf and rf:IsA("RemoteEvent") then return rf end
+    for _, child in ipairs(net:GetDescendants()) do
+        if child:IsA("RemoteEvent") and string.find(child.Name, "KnifeKill", 1, true) then
+            return child
+        end
+    end
+    return nil
+end
+
+--============================================================
+--  EVENT FARM
+--============================================================
+local function GetEventDropPart(drop)
+    if not drop or not drop.Parent then return nil end
+    local touch = drop:FindFirstChild("Touch", true)
+    if touch and touch:IsA("BasePart") then return touch end
+    for _, child in ipairs(drop:GetDescendants()) do
+        if child:IsA("BasePart") then return child end
+    end
+    return nil
+end
+
+local EventFarm = {}
+EventFarm.__index = EventFarm
+function EventFarm.new()
+    return setmetatable({
+        running = false, tickConn = nil, tickAccum = 0, TICK_RATE = 0.5, collected = 0,
+    }, EventFarm)
+end
+function EventFarm:collectDrops()
+    local myHRP = GetHRP(LocalPlayer)
+    if not myHRP then return end
+    local spawnables = workspace:FindFirstChild("SpawnablesClient")
+    if not spawnables then return end
+    for _, drop in ipairs(spawnables:GetChildren()) do
+        local part = GetEventDropPart(drop)
+        if part and part:IsA("BasePart") then
+            local ok = pcall(function()
+                firetouchinterest(myHRP, part, 0)
+                firetouchinterest(myHRP, part, 1)
+            end)
+            if ok then self.collected = self.collected + 1
+            else pcall(function() myHRP.CFrame = CFrame.new(part.Position) end) end
+        end
+    end
+end
+function EventFarm:tick(dt)
+    if not self.running or not Config.EventFarmEnabled then return end
+    self.tickAccum = self.tickAccum + dt
+    if self.tickAccum < self.TICK_RATE then return end
+    self.tickAccum = 0
+    self:collectDrops()
+end
+function EventFarm:start()
+    if self.running then return end
+    self.running = true
+    self.tickAccum = 0
+    self.tickConn = RunService.Heartbeat:Connect(function(dt) self:tick(dt) end)
+end
+function EventFarm:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then self.tickConn:Disconnect() self.tickConn = nil end
+end
+
+--============================================================
+--  ZONAS DE TELETRANSPORTE
+--============================================================
+local PLATFORM_ROWS = { "Right Platforms", "Left Platforms" }
+
+local ZONE_TABLE = {
+    ["Right Platforms"] = {
+        ["1v1"] = { Zone = "PadZone1", Main = "Pad1", Alt = "Pad2" },
+        ["2v2"] = { Zone = "PadZone2", Main = "Pad1", Alt = "Pad2" },
+        ["3v3"] = { Zone = "PadZone3", Main = "Pad1", Alt = "Pad2" },
+        ["4v4"] = { Zone = "PadZone4", Main = "Pad1", Alt = "Pad2" },
+    },
+    ["Left Platforms"] = {
+        ["1v1"] = { Zone = "PadZone5", Main = "Pad1", Alt = "Pad2" },
+        ["2v2"] = { Zone = "PadZone6", Main = "Pad1", Alt = "Pad2" },
+        ["3v3"] = { Zone = "PadZone7", Main = "Pad1", Alt = "Pad2" },
+        ["4v4"] = { Zone = "PadZone8", Main = "Pad1", Alt = "Pad2" },
+    },
+}
+
+local function GetPadFromZone(zoneName, padName)
+    local padZones = workspace:FindFirstChild("PadZones")
+    if not padZones then return nil end
+    local zone = padZones:FindFirstChild(zoneName)
+    if not zone then return nil end
+    local holder = zone:FindFirstChild(padName)
+    if not holder then return nil end
+    local pad = holder:FindFirstChild("Pad")
+    if pad and pad:IsA("BasePart") then return pad end
+    return nil
+end
+
+local function IsInsidePad(position, pad, tolerance)
+    if not (position and pad and pad:IsA("BasePart")) then return false end
+    tolerance = tonumber(tolerance) or 0
+    local localPos = pad.CFrame:PointToObjectSpace(position)
+    local half = pad.Size / 2
+    return math.abs(localPos.X) <= (half.X + tolerance)
+        and math.abs(localPos.Z) <= (half.Z + tolerance)
+        and localPos.Y >= -(half.Y + 6)
+        and localPos.Y <= (half.Y + 14)
+end
+
+--============================================================
+--  AUTO TELEPORT
+--============================================================
+local AutoTeleport = {}
+AutoTeleport.__index = AutoTeleport
+function AutoTeleport.new(role)
+    return setmetatable({
+        role = role, running = false, tickConn = nil,
+        cooldown = 0, COOLDOWN = 0.5,
+        _lastPad = nil, _lastPadColors = nil,
+    }, AutoTeleport)
+end
+function AutoTeleport:getTargetPad()
+    local row = Config.PlatformRow
+    local duel = Config.DuelType
+    local entry = ZONE_TABLE[row] and ZONE_TABLE[row][duel]
+    if not entry then entry = ZONE_TABLE["Right Platforms"]["1v1"] end
+    local padName = (self.role == "Alt") and entry.Alt or entry.Main
+    return GetPadFromZone(entry.Zone, padName), entry.Zone, padName
+end
+function AutoTeleport:isEnabled()
+    if self.role == "Main" then return Config.AutoTeleportMain == true end
+    return Config.AutoTeleportAlt == true
+end
+function AutoTeleport:isInMatch()
+    local g = LocalPlayer:GetAttribute("Game")
+    return typeof(g) == "string" and g ~= ""
+end
+function AutoTeleport:tick(dt)
+    if not self.running or not self:isEnabled() then return end
+    if self:isInMatch() then return end
+    self.cooldown = self.cooldown + dt
+    if self.cooldown < self.COOLDOWN then return end
+    self.cooldown = 0
+    local pad = self:getTargetPad()
+    if not pad then return end
+    self:applyPadHighlight(pad)
+    local myHRP = GetHRP(LocalPlayer)
+    if myHRP and IsInsidePad(myHRP.Position, pad, 0.5) then return end
+    local myHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if myHRP and myHum then
+        pcall(function()
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+            myHRP.AssemblyLinearVelocity = Vector3.zero
+            myHum:MoveTo(pad.Position)
+        end)
+    end
+end
+function AutoTeleport:applyPadHighlight(pad)
+    if self._lastPad ~= pad then
+        self:restorePadHighlight()
+        self._lastPad = pad
+        self._lastPadColors = { Color = pad.Color, Transparency = pad.Transparency }
+    end
+    local color = (self.role == "Alt") and Color3.fromRGB(255, 70, 70) or Color3.fromRGB(70, 145, 255)
+    pcall(function() pad.Color = color pad.Transparency = 0.5 end)
+end
+function AutoTeleport:restorePadHighlight()
+    if self._lastPad and self._lastPadColors and self._lastPad.Parent then
+        pcall(function()
+            self._lastPad.Color = self._lastPadColors.Color
+            self._lastPad.Transparency = self._lastPadColors.Transparency
+        end)
+    end
+    self._lastPad = nil
+    self._lastPadColors = nil
+end
+function AutoTeleport:start()
+    if self.running then return end
+    self.running = true
+    self.cooldown = 0
+    local pad = self:getTargetPad()
+    if pad then self:applyPadHighlight(pad) end
+    self.tickConn = RunService.Heartbeat:Connect(function(dt) self:tick(dt) end)
+end
+function AutoTeleport:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then self.tickConn:Disconnect() self.tickConn = nil end
+    self:restorePadHighlight()
+end
+
+--============================================================
+--  BREAK STREAK
+--============================================================
+local BreakStreak = {}
+BreakStreak.__index = BreakStreak
+function BreakStreak.new()
+    return setmetatable({ running = false, tickConn = nil, cooldown = 0, COOLDOWN = 1 }, BreakStreak)
+end
+function BreakStreak:getStreak(player)
+    local streak = player:FindFirstChild("Streak")
+    if streak and (streak:IsA("IntValue") or streak:IsA("NumberValue")) then
+        return tonumber(streak.Value)
+    end
+    local hrp = GetHRP(player)
+    local headTag = hrp and hrp:FindFirstChild("HeadTag")
+    local streakFolder = headTag and headTag:FindFirstChild("Streak")
+    local label = streakFolder and streakFolder:FindFirstChild("TextLabel")
+    if label then
+        local txt = tostring(label.Text or ""):gsub("[^%d%-]", "")
+        return tonumber(txt)
+    end
+    return nil
+end
+function BreakStreak:isInMatch() return hasGameAndMap(LocalPlayer) end
+function BreakStreak:shouldSkip(player)
+    if not EnemyChecker:isEnemy(player) then return true end
+    if not IsAlive(player) then return true end
+    local target = Config.BreakStreakTarget or 1
+    local playerStreak = self:getStreak(player)
+    if not playerStreak or playerStreak < target then return true end
+    return false
+end
+function BreakStreak:sendBreakStreak(player)
+    local net = getRemotes()
+    local rf = net and net:FindFirstChild("RE/Match/SetStatePlr")
+    if rf and rf:IsA("RemoteEvent") then
+        pcall(function() rf:FireServer("REMOVE") end)
+        return true
+    end
+    return false
+end
+function BreakStreak:tick(dt)
+    if not self.running or not Config.BreakStreakEnabled then return end
+    if not self:isInMatch() then return end
+    self.cooldown = self.cooldown + dt
+    if self.cooldown < self.COOLDOWN then return end
+    self.cooldown = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not self:shouldSkip(player) then
+            if self:sendBreakStreak(player) then break end
+        end
+    end
+end
+function BreakStreak:start()
+    if self.running then return end
+    self.running = true
+    self.cooldown = 0
+    self.tickConn = RunService.Heartbeat:Connect(function(dt) self:tick(dt) end)
+end
+function BreakStreak:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then self.tickConn:Disconnect() self.tickConn = nil end
+end
+
+--============================================================
+--  LOWER KD
+--============================================================
+local LowerKD = {}
+LowerKD.__index = LowerKD
+function LowerKD.new()
+    return setmetatable({ running = false, tickConn = nil, cooldown = 0, COOLDOWN = 1 }, LowerKD)
+end
+function LowerKD:getKills(player)
+    local attr = tonumber(player:GetAttribute("RoundKills"))
+    if attr then return attr end
+    local kills = player:FindFirstChild("RoundKills")
+    if kills and (kills:IsA("IntValue") or kills:IsA("NumberValue")) then
+        return tonumber(kills.Value) or 0
+    end
+    local ls = player:FindFirstChild("leaderstats")
+    local lsKills = ls and ls:FindFirstChild("RoundKills")
+    if lsKills and (lsKills:IsA("IntValue") or lsKills:IsA("NumberValue")) then
+        return tonumber(lsKills.Value) or 0
+    end
+    return nil
+end
+function LowerKD:isInMatch() return hasGameAndMap(LocalPlayer) end
+function LowerKD:tick(dt)
+    if not self.running or not Config.LowerKDEnabled then return end
+    if not self:isInMatch() then return end
+    self.cooldown = self.cooldown + dt
+    if self.cooldown < self.COOLDOWN then return end
+    self.cooldown = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if EnemyChecker:isEnemy(player) and IsAlive(player) then
+            local kills = self:getKills(player)
+            if kills and kills >= (Config.LowerKDTarget or 4) then
+                local hrp = GetHRP(player)
+                if hrp and CanSee(player, hrp) then
+                    pcall(function()
+                        local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                        if tool then tool:Activate() end
+                    end)
+                    break
+                end
+            end
+        end
+    end
+end
+function LowerKD:start()
+    if self.running then return end
+    self.running = true
+    self.cooldown = 0
+    self.tickConn = RunService.Heartbeat:Connect(function(dt) self:tick(dt) end)
+end
+function LowerKD:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then self.tickConn:Disconnect() self.tickConn = nil end
+end
+
+--============================================================
+--  AUTO KILL ALL
+--============================================================
+local KillAll = {}
+KillAll.__index = KillAll
+function KillAll.new()
+    return setmetatable({
+        running = false, tickConn = nil, cooldown = 0, killed = 0, failed = 0,
+    }, KillAll)
+end
+function KillAll:isInMatch() return hasGameAndMap(LocalPlayer) end
+function KillAll:canKill(player)
+    if not EnemyChecker:isEnemy(player) then return false end
+    if not IsAlive(player) then return false end
+    local myHRP = GetHRP(LocalPlayer)
+    local hisHRP = GetHRP(player)
+    if not (myHRP and hisHRP) then return false end
+    local dist = (myHRP.Position - hisHRP.Position).Magnitude
+    if dist > (Config.KillAllRange or 500) then return false end
+    if Config.KillAllRequireLOS and not CanSee(player, hisHRP) then return false end
+    return true
+end
+function KillAll:killPlayer(player)
+    local rf = getKnifeKillRemote()
+    if not rf then return false end
+    local hisChar = player.Character
+    if not hisChar then return false end
+    local hisHum = hisChar:FindFirstChildOfClass("Humanoid")
+    local hisHRP = GetHRP(player)
+    local ok = pcall(function()
+        if hisHum then rf:FireServer(hisHum) return end
+        if hisHRP then rf:FireServer(hisHRP) return end
+        rf:FireServer()
+    end)
+    return ok
+end
+function KillAll:tick(dt)
+    if not self.running or not Config.KillAllEnabled then return end
+    if not self:isInMatch() then return end
+    self.cooldown = self.cooldown + dt
+    if self.cooldown < (Config.KillAllCooldown or 0.1) then return end
+    self.cooldown = 0
+    for _, player in ipairs(Players:GetPlayers()) do
+        if self:canKill(player) then
+            if self:killPlayer(player) then
+                self.killed = self.killed + 1
+            else
+                self.failed = self.failed + 1
+            end
+        end
+    end
+end
+function KillAll:start()
+    if self.running then return end
+    self.running = true
+    self.cooldown = 0
+    self.tickConn = RunService.Heartbeat:Connect(function(dt) self:tick(dt) end)
+end
+function KillAll:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then self.tickConn:Disconnect() self.tickConn = nil end
+end
+
+--============================================================
+--  ⭐ STREAK FARM (NUEVO)
+--  Sistema coordinado de 2 cuentas:
+--   - Farmer: mata a la víctima en loop
+--   - Victim: se deja matar y espera al lobby
+--============================================================
+local StreakFarm = {}
+StreakFarm.__index = StreakFarm
+
+function StreakFarm.new()
+    return setmetatable({
+        running = false,
+        tickConn = nil,
+        state = "idle",              -- "idle" / "waiting_match" / "in_match" / "post_match"
+        lastMatchState = false,      -- si estaba en partida en el tick anterior
+        matchStartTime = 0,
+        matchKills = 0,
+        totalRounds = 0,
+        totalKills = 0,
+        cooldown = 0,
+    }, StreakFarm)
+end
+
+function StreakFarm:getRole()
+    return Config.StreakFarmRole
+end
+
+function StreakFarm:isInMatch()
+    local g = LocalPlayer:GetAttribute("Game")
+    return typeof(g) == "string" and g ~= ""
+end
+
+-- Cuenta las kills del round actual (para farmer)
+function StreakFarm:getMyKills()
+    local attr = tonumber(LocalPlayer:GetAttribute("RoundKills"))
+    if attr then return attr end
+    local ls = LocalPlayer:FindFirstChild("leaderstats")
+    local k = ls and ls:FindFirstChild("RoundKills")
+    if k and (k:IsA("IntValue") or k:IsA("NumberValue")) then
+        return tonumber(k.Value) or 0
+    end
+    return nil
+end
+
+--============================================================
+--  ROL: FARMER
+--============================================================
+function StreakFarm:tickFarmer(dt)
+    -- Si no está en partida → esperando
+    if not self:isInMatch() then
+        -- Vuelve al pad si AutoTeleport está activo
+        return
+    end
+
+    -- En partida: matar a TODOS los enemigos (la víctima entre ellos)
+    self.matchKills = self:getMyKills() or self.matchKills
+
+    -- Activa Kill All automáticamente si está configurado
+    if Config.StreakFarmAutoKill and not Config.KillAllEnabled then
+        Config.KillAllEnabled = true
+        killAll:start()
+
+        WindUI:Notify({
+            Title = "Streak Farm",
+            Content = "Partida detectada — Kill All activado.",
+            Icon = "play",
+            Duration = 3,
+        })
+    end
+
+    -- Si alcanzó el máximo de kills por ronda, apaga Kill All
+    if Config.StreakFarmMaxKills > 0 and self.matchKills >= Config.StreakFarmMaxKills then
+        if Config.KillAllEnabled then
+            Config.KillAllEnabled = false
+            killAll:stop()
+            WindUI:Notify({
+                Title = "Streak Farm",
+                Content = ("Límite alcanzado (%d kills) — esperando fin de ronda."):format(self.matchKills),
+                Icon = "check",
+                Duration = 3,
+            })
+        end
+    end
+end
+
+--============================================================
+--  ROL: VICTIM
+--============================================================
+function StreakFarm:tickVictim(dt)
+    -- Si no está en partida → esperando en el pad
+    if not self:isInMatch() then
+        return
+    end
+
+    -- En partida: quedarse quieto
+    local myHRP = GetHRP(LocalPlayer)
+    if myHRP then
+        pcall(function()
+            myHRP.AssemblyLinearVelocity = Vector3.zero
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    -- Asegurarse que Kill All NO esté activo
+    if Config.KillAllEnabled then
+        Config.KillAllEnabled = false
+        killAll:stop()
+    end
+
+    -- Asegurarse que KillAllKeepOn NO esté activo
+    if Config.KillAllKeepOn then
+        Config.KillAllKeepOn = false
+    end
+end
+
+--============================================================
+--  CICLO PRINCIPAL
+--============================================================
+function StreakFarm:tick(dt)
+    if not self.running then return end
+    if not Config.StreakFarmEnabled then return end
+
+    local role = self:getRole()
+    if role == "off" then return end
+
+    local nowInMatch = self:isInMatch()
+
+    -- Detección de transición lobby → partida
+    if nowInMatch and not self.lastMatchState then
+        -- Entramos a partida
+        self.matchStartTime = os.clock()
+        self.matchKills = 0
+        self.totalRounds = self.totalRounds + 1
+
+        WindUI:Notify({
+            Title = "Streak Farm",
+            Content = ("Entraste a partida (Ronda #%d) — Rol: %s"):format(
+                self.totalRounds,
+                role == "farmer" and "Farmer" or "Víctima"
+            ),
+            Icon = "play",
+            Duration = 4,
+        })
+    end
+
+    -- Detección de transición partida → lobby
+    if not nowInMatch and self.lastMatchState then
+        -- Terminó la partida
+        local killsThisRound = self.matchKills
+
+        WindUI:Notify({
+            Title = "Streak Farm",
+            Content = ("Ronda #%d terminada (%d kills). Esperando %ds..."):format(
+                self.totalRounds,
+                killsThisRound,
+                Config.StreakFarmLobbyWait
+            ),
+            Icon = "check",
+            Duration = 4,
+        })
+
+        -- Apagar Kill All (por si acaso)
+        if Config.KillAllEnabled then
+            Config.KillAllEnabled = false
+            killAll:stop()
+        end
+
+        -- Espera en el lobby
+        task.spawn(function()
+            task.wait(Config.StreakFarmLobbyWait)
+            -- El AutoTeleport se encargará de volver al pad
+        end)
+
+        self.matchKills = 0
+    end
+
+    self.lastMatchState = nowInMatch
+
+    -- Ejecutar el tick según el rol
+    if role == "farmer" then
+        self:tickFarmer(dt)
+    elseif role == "victim" then
+        self:tickVictim(dt)
+    end
+end
+
+function StreakFarm:start()
+    if self.running then return end
+    self.running = true
+    self.state = "idle"
+    self.lastMatchState = self:isInMatch()
+    self.totalRounds = 0
+    self.totalKills = 0
+
+    self.tickConn = RunService.Heartbeat:Connect(function(dt)
+        self:tick(dt)
+    end)
+
+    -- Auto-activar AutoTeleport según el rol
+    if self:getRole() == "farmer" then
+        Config.AutoTeleportMain = true
+        Config.AutoTeleportAlt = false
+        autoTPAlt:stop()
+        autoTPMain:start()
+    elseif self:getRole() == "victim" then
+        Config.AutoTeleportAlt = true
+        Config.AutoTeleportMain = false
+        autoTPMain:stop()
+        autoTPAlt:start()
+    end
+end
+
+function StreakFarm:stop()
+    if not self.running then return end
+    self.running = false
+    if self.tickConn then
+        self.tickConn:Disconnect()
+        self.tickConn = nil
+    end
+    -- Apagar Kill All
+    if Config.KillAllEnabled then
+        Config.KillAllEnabled = false
+        killAll:stop()
+    end
+end
+
+--============================================================
+--  INSTANCIAS
+--============================================================
+local eventFarm   = EventFarm.new()
+local breakStreak = BreakStreak.new()
+local lowerKD     = LowerKD.new()
+local autoTPMain  = AutoTeleport.new("Main")
+local autoTPAlt   = AutoTeleport.new("Alt")
+local killAll     = KillAll.new()
+local streakFarm  = StreakFarm.new()
+
+--============================================================
+--  WINDUI
+--============================================================
+local Window = WindUI:CreateWindow({
+    Title = "Event Farm + Streak Farm",
+    Icon = "swords",
+    Author = "RysHub 🇦🇷",
+    Folder = "RysHub/EventFarm",
+    Theme = "Dark",
+    NewElements = true,
+    Size = UDim2.fromOffset(620, 500),
+})
+
+Window:Tag({ Title = "v1.2", Icon = "github", Color = Color3.fromHex("#4FC3F7"), Radius = 13 })
+
+Window:EditOpenButton({
+    Title = "Farm Hub",
+    Icon = "swords",
+    CornerRadius = UDim.new(0, 16),
+    StrokeThickness = 2,
+    Color = ColorSequence.new(Color3.fromHex("FF0F7B"), Color3.fromHex("F89B29")),
+    OnlyMobile = false,
+    Enabled = true,
+    Draggable = true,
+})
+
+--============================================================
+--  TAB: ⭐ STREAK FARM (primera tab, la más importante)
+--============================================================
+local StreakTab = Window:Tab({ Title = "Streak Farm", Icon = "flame" })
+
+StreakTab:Section({ Title = "Configuración de Rol", TextXAlignment = "Left" })
+
+StreakTab:Paragraph({
+    Title = "Farm de Racha entre 2 cuentas",
+    Desc = "Ejecutá este script en AMBAS cuentas. En una elegí 'Farmer' (el que mata) y en la otra 'Víctima' (el que se deja matar). El script detecta automáticamente cuándo entran a partida y cada uno cumple su rol. Al terminar la ronda, ambos vuelven al lobby y repiten.",
+})
+
+StreakTab:Dropdown({
+    Title = "Tu rol",
+    Desc = "Elegí si esta cuenta va a matar o ser la víctima.",
+    Values = { "Off (desactivado)", "Farmer (mato yo)", "Víctima (me dejo matar)" },
+    Value = "Off (desactivado)",
+    Callback = function(value)
+        if value == "Farmer (mato yo)" then
+            Config.StreakFarmRole = "farmer"
+        elseif value == "Víctima (me dejo matar)" then
+            Config.StreakFarmRole = "victim"
+        else
+            Config.StreakFarmRole = "off"
+        end
+
+        -- Actualizar hint
+        if Config.StreakFarmEnabled then
+            streakFarm:stop()
+            streakFarm:start()
+        end
+    end,
+})
+
+StreakTab:Toggle({
+    Title = "Activar Streak Farm",
+    Desc = "Inicia el ciclo automático de farmeo de racha.",
+    Value = false,
+    Callback = function(value)
+        Config.StreakFarmEnabled = value == true
+
+        if Config.StreakFarmEnabled then
+            if Config.StreakFarmRole == "off" then
+                WindUI:Notify({
+                    Title = "Streak Farm",
+                    Content = "Elegí un rol (Farmer o Víctima) primero.",
+                    Icon = "alert-triangle",
+                    Duration = 4,
+                })
+                Config.StreakFarmEnabled = false
+                return
+            end
+
+            streakFarm:start()
+            WindUI:Notify({
+                Title = "Streak Farm",
+                Content = ("Activado como %s."):format(
+                    Config.StreakFarmRole == "farmer" and "Farmer" or "Víctima"
+                ),
+                Icon = "flame",
+                Duration = 4,
+            })
+        else
+            streakFarm:stop()
+            WindUI:Notify({
+                Title = "Streak Farm",
+                Content = "Desactivado.",
+                Icon = "info",
+                Duration = 3,
+            })
+        end
+    end,
+})
+
+StreakTab:Section({ Title = "Opciones del Farmer", TextXAlignment = "Left" })
+
+StreakTab:Toggle({
+    Title = "Auto Kill All en partida",
+    Desc = "Si sos Farmer, activa Kill All automáticamente al detectar la partida.",
+    Value = true,
+    Callback = function(value)
+        Config.StreakFarmAutoKill = value == true
+    end,
+})
+
+StreakTab:Slider({
+    Title = "Máximo de kills por ronda",
+    Desc = "0 = infinito. Si ponés un número, el Farmer deja de matar al llegar.",
+    Step = 1,
+    Value = { Min = 0, Max = 50, Default = 0 },
+    Callback = function(value)
+        Config.StreakFarmMaxKills = math.floor(tonumber(value) or 0)
+    end,
+})
+
+StreakTab:Slider({
+    Title = "Espera en lobby (segundos)",
+    Desc = "Cuánto esperar entre rondas antes de volver a entrar.",
+    Step = 1,
+    Value = { Min = 1, Max = 30, Default = 3 },
+    Callback = function(value)
+        Config.StreakFarmLobbyWait = math.floor(tonumber(value) or 3)
+    end,
+})
+
+StreakTab:Section({ Title = "Estado del Ciclo", TextXAlignment = "Left" })
+
+StreakTab:Paragraph({
+    Title = "Cómo funciona",
+    Desc = "1. Ambos aprietan 'Activar Streak Farm'.\n2. Se teletransportan automáticamente al 1v1 (Farmer → Pad1, Víctima → Pad2).\n3. Al entrar a partida, el Farmer activa Kill All.\n4. La Víctima se queda quieta.\n5. Al terminar la ronda, ambos vuelven al lobby.\n6. Se repite el ciclo.",
+})
+
+--============================================================
+--  TAB: AUTO KILL
+--============================================================
+local KillTab = Window:Tab({ Title = "Auto Kill", Icon = "skull" })
+
+KillTab:Section({ Title = "Kill All", TextXAlignment = "Left" })
+
+local killAllToggle
+killAllToggle = KillTab:Toggle({
+    Title = "Kill All Enemies",
+    Desc = "Mata automáticamente a TODOS los enemigos de la partida.",
+    Value = false,
+    Callback = function(value)
+        if Config.KillAllKeepOn and not value then
+            task.defer(function()
+                if killAllToggle then pcall(function() killAllToggle:Set(true) end) end
+            end)
+            WindUI:Notify({
+                Title = "Kill All",
+                Content = "Bloqueado por 'Keep Always On'.",
+                Icon = "lock",
+                Duration = 3,
+            })
+            return
+        end
+
+        Config.KillAllEnabled = value == true
+        if Config.KillAllEnabled then
+            killAll:start()
+        else
+            killAll:stop()
+        end
+    end,
+})
+
+KillTab:Toggle({
+    Title = "Keep Kill All Always On",
+    Desc = "Fuerza que Kill All quede siempre activo y bloquea su toggle.",
+    Value = false,
+    Callback = function(value)
+        Config.KillAllKeepOn = value == true
+        if Config.KillAllKeepOn then
+            Config.KillAllEnabled = true
+            killAll:start()
+            if killAllToggle then pcall(function() killAllToggle:Set(true) end) end
+        end
+    end,
+})
+
+KillTab:Section({ Title = "Opciones", TextXAlignment = "Left" })
+
+KillTab:Slider({
+    Title = "Cooldown entre kills (segundos)",
+    Step = 0.05,
+    Value = { Min = 0.05, Max = 1, Default = 0.1 },
+    Callback = function(value) Config.KillAllCooldown = tonumber(value) or 0.1 end,
+})
+
+KillTab:Slider({
+    Title = "Rango máximo (studs)",
+    Step = 50,
+    Value = { Min = 100, Max = 2000, Default = 500 },
+    Callback = function(value) Config.KillAllRange = tonumber(value) or 500 end,
+})
+
+KillTab:Toggle({
+    Title = "Requiere línea de visión",
+    Value = false,
+    Callback = function(value) Config.KillAllRequireLOS = value == true end,
+})
+
+--============================================================
+--  TAB: EVENT FARM
+--============================================================
+local EventTab = Window:Tab({ Title = "Event Farm", Icon = "gift" })
+
+EventTab:Toggle({
+    Title = "Event Farm",
+    Desc = "Recolecta automáticamente los drops del evento.",
+    Value = false,
+    Callback = function(value)
+        Config.EventFarmEnabled = value == true
+        if Config.EventFarmEnabled then eventFarm:start() else eventFarm:stop() end
+    end,
+})
+
+EventTab:Slider({
+    Title = "Velocidad de recolección (segundos)",
+    Step = 0.1,
+    Value = { Min = 0.1, Max = 2, Default = 0.5 },
+    Callback = function(value) eventFarm.TICK_RATE = tonumber(value) or 0.5 end,
+})
+
+--============================================================
+--  TAB: AUTO TELEPORT
+--============================================================
+local TPTab = Window:Tab({ Title = "Auto Teleport", Icon = "repeat" })
+
+TPTab:Toggle({
+    Title = "Auto Teleport MAIN",
+    Desc = "Te mueve al pad azul cuando no estás en partida.",
+    Value = false,
+    Callback = function(value)
+        Config.AutoTeleportMain = value == true
+        if Config.AutoTeleportMain then
+            Config.AutoTeleportAlt = false
+            autoTPAlt:stop()
+        end
+        if Config.AutoTeleportMain then autoTPMain:start() else autoTPMain:stop() end
+    end,
+})
+
+TPTab:Toggle({
+    Title = "Auto Teleport ALT",
+    Desc = "Te mueve al pad rojo cuando no estás en partida.",
+    Value = false,
+    Callback = function(value)
+        Config.AutoTeleportAlt = value == true
+        if Config.AutoTeleportAlt then
+            Config.AutoTeleportMain = false
+            autoTPMain:stop()
+        end
+        if Config.AutoTeleportAlt then autoTPAlt:start() else autoTPAlt:stop() end
+    end,
+})
+
+TPTab:Dropdown({
+    Title = "Tipo de Duelo",
+    Values = { "1v1", "2v2", "3v3", "4v4" },
+    Value = "1v1",
+    Callback = function(value)
+        if ZONE_TABLE["Right Platforms"][value] then Config.DuelType = value end
+    end,
+})
+
+TPTab:Dropdown({
+    Title = "Fila de Plataformas",
+    Values = PLATFORM_ROWS,
+    Value = "Right Platforms",
+    Callback = function(value)
+        for _, valid in ipairs(PLATFORM_ROWS) do
+            if valid == value then Config.PlatformRow = value return end
+        end
+    end,
+})
+
+--============================================================
+--  TAB: BREAK STREAK
+--============================================================
+local BSTab = Window:Tab({ Title = "Break Streak", Icon = "shield" })
+
+BSTab:Toggle({
+    Title = "Break Streak",
+    Desc = "Rompe rachas de enemigos con racha alta.",
+    Value = false,
+    Callback = function(value)
+        Config.BreakStreakEnabled = value == true
+        if Config.BreakStreakEnabled then breakStreak:start() else breakStreak:stop() end
+    end,
+})
+
+BSTab:Slider({
+    Title = "Racha mínima",
+    Step = 1,
+    Value = { Min = 1, Max = 50, Default = 1 },
+    Callback = function(value) Config.BreakStreakTarget = math.floor(tonumber(value) or 1) end,
+})
+
+--============================================================
+--  TAB: LOWER KD
+--============================================================
+local KDTab = Window:Tab({ Title = "Lower KD", Icon = "target" })
+
+KDTab:Toggle({
+    Title = "Lower KD",
+    Desc = "Ataca enemigos con muchas kills.",
+    Value = false,
+    Callback = function(value)
+        Config.LowerKDEnabled = value == true
+        if Config.LowerKDEnabled then lowerKD:start() else lowerKD:stop() end
+    end,
+})
+
+KDTab:Slider({
+    Title = "Kills mínimas del enemigo",
+    Step = 1,
+    Value = { Min = 1, Max = 30, Default = 4 },
+    Callback = function(value) Config.LowerKDTarget = math.floor(tonumber(value) or 4) end,
+})
+
+--============================================================
+--  TAB: SETTINGS
+--============================================================
+local SettingsTab = Window:Tab({ Title = "Settings", Icon = "cog" })
+
+SettingsTab:Paragraph({
+    Title = "Event Farm + Streak Farm by RysHub",
+    Desc = "Módulos: Streak Farm (2 cuentas) · Kill All · Event Farm · Auto Teleport · Break Streak · Lower KD.",
+})
+
+SettingsTab:Button({
+    Title = "Resetear posición de pads",
+    Callback = function()
+        autoTPMain:restorePadHighlight()
+        autoTPAlt:restorePadHighlight()
+    end,
+})
+
+SettingsTab:Button({
+    Title = "Desinstalar todo",
+    Callback = function()
+        Config.EventFarmEnabled = false
+        Config.AutoTeleportMain = false
+        Config.AutoTeleportAlt  = false
+        Config.BreakStreakEnabled = false
+        Config.LowerKDEnabled = false
+        Config.KillAllEnabled = false
+        Config.KillAllKeepOn = false
+        Config.StreakFarmEnabled = false
+
+        eventFarm:stop()
+        breakStreak:stop()
+        lowerKD:stop()
+        autoTPMain:stop()
+        autoTPAlt:stop()
+        killAll:stop()
+        streakFarm:stop()
+
+        pcall(function() Window:Destroy() end)
+    end,
+})
+
+--============================================================
+--  BIENVENIDA
+--============================================================
+WindUI:Notify({
+    Title = "Farm Hub v1.2",
+    Content = "Cargado. Configurá tu rol en la tab 'Streak Farm'.",
+    Icon = "flame",
+    Duration = 5,
+})
+
+print("╔══════════════════════════════════════════╗")
+print("║   EVENT FARM + STREAK FARM - CARGADO     ║")
+print("╠══════════════════════════════════════════╣")
+print("║  Streak Farm: elegí Farmer o Víctima     ║")
+print("║  en la primera tab                       ║")
+print("╚══════════════════════════════════════════╝")
