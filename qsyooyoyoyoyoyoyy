@@ -1051,6 +1051,86 @@ task.wait(2)
         end
     end
 
+    local function hookHumanoid(character)
+        local hum = character:WaitForChild("Humanoid", 10)
+        local animate = character:WaitForChild("Animate", 10)
+        if not hum or not animate then return end
+
+        task.wait(0.5)
+        applyAllLastAnimations()
+
+        hum.StateChanged:Connect(function(oldState, newState)
+            if newState == Enum.HumanoidStateType.Freefall then
+                if lastAnimations.Fall then
+                    local fa = animate:FindFirstChild("fall")
+                    if fa then
+                        local fallAnim = fa:FindFirstChild("FallAnim")
+                        if fallAnim then
+                            fallAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Fall
+                        end
+                    end
+                end
+            elseif newState == Enum.HumanoidStateType.Landed then
+                if lastAnimations.Fall then
+                    local fa = animate:FindFirstChild("fall")
+                    if fa then
+                        local fallAnim = fa:FindFirstChild("FallAnim")
+                        if fallAnim then
+                            fallAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Fall
+                        end
+                    end
+                end
+            elseif newState == Enum.HumanoidStateType.Running
+                or newState == Enum.HumanoidStateType.RunningNoPhysics then
+                if lastAnimations.Walk then
+                    local wa = animate:FindFirstChild("walk")
+                    if wa then
+                        local walkAnim = wa:FindFirstChild("WalkAnim")
+                        if walkAnim then
+                            walkAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Walk
+                        end
+                    end
+                end
+                if lastAnimations.Run then
+                    local ra = animate:FindFirstChild("run")
+                    if ra then
+                        local runAnim = ra:FindFirstChild("RunAnim")
+                        if runAnim then
+                            runAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Run
+                        end
+                    end
+                end
+            elseif newState == Enum.HumanoidStateType.Jumping then
+                if lastAnimations.Jump then
+                    local ja = animate:FindFirstChild("jump")
+                    if ja then
+                        local jumpAnim = ja:FindFirstChild("JumpAnim")
+                        if jumpAnim then
+                            jumpAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Jump
+                        end
+                    end
+                end
+            elseif newState == Enum.HumanoidStateType.Swimming then
+                if lastAnimations.Swim and animate:FindFirstChild("swim") then
+                    animate.swim.Swim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Swim
+                end
+                if lastAnimations.SwimIdle and animate:FindFirstChild("swimidle") then
+                    animate.swimidle.SwimIdle.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.SwimIdle
+                end
+            elseif newState == Enum.HumanoidStateType.Climbing then
+                if lastAnimations.Climb then
+                    local ca = animate:FindFirstChild("climb")
+                    if ca then
+                        local climbAnim = ca:FindFirstChild("ClimbAnim")
+                        if climbAnim then
+                            climbAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. lastAnimations.Climb
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
     local resetButton = Instance.new("TextButton")
     resetButton.Name = "ResetButton"
     resetButton.Text = "R"
@@ -1137,18 +1217,10 @@ task.wait(2)
 
     loadLastAnimations()
 
-    Players.LocalPlayer.CharacterAdded:Connect(function(character)
-        local hum = character:WaitForChild("Humanoid")
-        local animate = character:WaitForChild("Animate", 10)
-        if not animate then return end
-
-        task.wait(0.5)
-        applyAllLastAnimations()
-        task.wait(0.5)
-        applyAllLastAnimations()
-        task.wait(1)
-        applyAllLastAnimations()
-    end)
+    if LP.Character then
+        hookHumanoid(LP.Character)
+    end
+    LP.CharacterAdded:Connect(hookHumanoid)
 
     task.spawn(function()
         while task.wait(2) do
