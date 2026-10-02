@@ -22,7 +22,6 @@ notifGui.Name = "GazeNotifyGui"
 notifGui.ResetOnSpawn = false
 notifGui.IgnoreGuiInset = true
 notifGui.DisplayOrder = 999
-notifGui.Enabled = false
 pcall(function() notifGui.Parent = GazeGoGui end)
 if not notifGui.Parent then notifGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -1450,4 +1449,126 @@ Players.LocalPlayer.CharacterAdded:Connect(function(character)
     if lastAnimations.Fall then setAnimation("Fall", lastAnimations.Fall) end
     if lastAnimations.Climb then setAnimation("Climb", lastAnimations.Climb) end
     if lastAnimations.Swim then setAnimation("Swim", lastAnimations.Swim) end
-    if lastAnimations.SwimIdle then setAnimation("SwimId
+    if lastAnimations.SwimIdle then setAnimation("SwimIdle", lastAnimations.SwimIdle) end
+end)
+
+
+local fileAnimations = {}
+
+if isfile("GreyLikesToSmellUrFeet.json") then
+    local data = readfile("GreyLikesToSmellUrFeet.json")
+    fileAnimations = HttpService:JSONDecode(data)
+    Animations = HttpService:JSONDecode(data)
+    Notify("Loaded", "Animations from GreyLikesToSmellUrFeet.json", 3)
+else
+    writefile("GreyLikesToSmellUrFeet.json", HttpService:JSONEncode(OriginalAnimations))
+    fileAnimations = HttpService:JSONDecode(HttpService:JSONEncode(OriginalAnimations))
+    Animations = OriginalAnimations
+    Notify("Saved", "Original animations to GreyLikesToSmellUrFeet.json", 3)
+end
+
+local function LoadAndUpdateAnimations()
+    local onlineAnimations = {}
+    
+    local function fetchOnlineAnimations()
+        local success, result = pcall(function()
+            return game:HttpGet("https://raw.githubusercontent.com/Gazer-Ha/Gaze-stuff/refs/heads/main/Gaze%20Anim%20Database")
+        end)
+        
+        if success and result then
+            local func, err = loadstring(result)
+            if func then
+                local ok, data = pcall(func)
+                if ok and type(data) == "table" then
+                    return data
+                end
+            end
+        end
+        return nil
+    end
+    
+    onlineAnimations = fetchOnlineAnimations()
+    
+    if not onlineAnimations then
+        Notify("Database", "Failed to load online animations", 3)
+        return
+    end
+    
+    local newAnimationsFound = 0
+    local updatedAnimations = 0
+    local hadChanges = false
+    
+    local function compareAnimData(a, b)
+        if type(a) ~= type(b) then
+            return false
+        end
+        if type(a) == "table" then
+            if #a ~= #b then return false end
+            for i = 1, #a do
+                if tostring(a[i]) ~= tostring(b[i]) then
+                    return false
+                end
+            end
+            return true
+        else
+            return tostring(a) == tostring(b)
+        end
+    end
+    
+    for animType, typeAnims in pairs(onlineAnimations) do
+        local fileTypeAnims = fileAnimations[animType] or {}
+        
+        for animName, animData in pairs(typeAnims) do
+            local fileData = fileTypeAnims[animName]
+            
+            if not fileData then
+                newAnimationsFound = newAnimationsFound + 1
+                hadChanges = true
+                Animations[animType] = Animations[animType] or {}
+                Animations[animType][animName] = animData
+                
+                fileAnimations[animType] = fileAnimations[animType] or {}
+                fileAnimations[animType][animName] = animData
+                
+                Notify("New", animName .. " (" .. animType .. ")", 2)
+            elseif not compareAnimData(animData, fileData) then
+                updatedAnimations = updatedAnimations + 1
+                hadChanges = true
+                Animations[animType][animName] = animData
+                fileAnimations[animType][animName] = animData
+                
+                Notify("Updated", animName .. " (" .. animType .. ")", 2)
+            end
+        end
+    end
+    
+    if hadChanges then
+        writefile("GreyLikesToSmellUrFeet.json", HttpService:JSONEncode(Animations))
+        local newFileData = readfile("GreyLikesToSmellUrFeet.json")
+        fileAnimations = HttpService:JSONDecode(newFileData)
+        
+        REFREHSTHEMAINBUTTONS()
+        
+        Notify("Database Update", 
+            string.format("New: %d | Updated: %d", newAnimationsFound, updatedAnimations), 
+            5)
+    else
+        Notify("Database", "All animations are up to date!", 3)
+    end
+end
+
+
+LoadAndUpdateAnimations()
+
+Notify("PLEASE", "Donate me, im poor :(", 1)
+local lt = os.clock() - st
+Notify("loaded", string.format("in %.2f seconds.", lt), 5)
+Notify("small Anim Update", "Ah yes. fresh anims and RTHRO", 20)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F1 then
+        screenGui.Enabled = not screenGui.Enabled
+    end
+end)
+end)
