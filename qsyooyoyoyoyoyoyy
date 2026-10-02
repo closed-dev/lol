@@ -22,6 +22,7 @@ notifGui.Name = "GazeNotifyGui"
 notifGui.ResetOnSpawn = false
 notifGui.IgnoreGuiInset = true
 notifGui.DisplayOrder = 999
+notifGui.Enabled = false
 pcall(function() notifGui.Parent = GazeGoGui end)
 if not notifGui.Parent then notifGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") end
 
