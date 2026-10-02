@@ -952,7 +952,6 @@ task.wait(2)
         pcall(function() writefile("MeWhenUrMom.json", data) end)
     end
 
-    -- ✅ Refresco suave: sin freeze, sin anchor, sin PlatformStand
     local function smoothRefresh(Hum, animType)
         if not Hum then return end
         if animType == "Walk" or animType == "Run" then
@@ -963,9 +962,7 @@ task.wait(2)
                 Hum.WalkSpeed = s
             end
         elseif animType == "Jump" then
-            -- No forzamos Jump, el Animate lo recarga solo al saltar
         elseif animType == "Fall" then
-            -- No forzamos Fall, el Animate lo recarga solo al caer
         elseif animType == "Swim" or animType == "SwimIdle" then
             if Hum:GetState() == Enum.HumanoidStateType.Swimming then
                 Hum:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -1018,8 +1015,6 @@ task.wait(2)
                 Animate.climb.ClimbAnim.AnimationId = "http://www.roblox.com/asset/?id=" .. animationId
             end
             saveLastAnimations()
-
-            -- Refresco suave sin congelar
             smoothRefresh(Hum, animationType)
         end)
 
@@ -1028,18 +1023,30 @@ task.wait(2)
         end
     end
 
+    local function applyAllLastAnimations()
+        local char = LP.Character
+        if not char then return end
+        local animate = char:FindFirstChild("Animate")
+        if not animate then return end
+        if lastAnimations.Walk then setAnimation("Walk", lastAnimations.Walk) end
+        if lastAnimations.Run then setAnimation("Run", lastAnimations.Run) end
+        if lastAnimations.Jump then setAnimation("Jump", lastAnimations.Jump) end
+        if lastAnimations.Fall then setAnimation("Fall", lastAnimations.Fall) end
+        if lastAnimations.Climb then setAnimation("Climb", lastAnimations.Climb) end
+        if lastAnimations.Swim then setAnimation("Swim", lastAnimations.Swim) end
+        if lastAnimations.SwimIdle then setAnimation("SwimIdle", lastAnimations.SwimIdle) end
+    end
+
     local function loadLastAnimations()
         if isfile("MeWhenUrMom.json") then
             local data = readfile("MeWhenUrMom.json")
             local ok, lastAnimationsData = pcall(function() return HttpService:JSONDecode(data) end)
             if ok and type(lastAnimationsData) == "table" then
-                if lastAnimationsData.Walk then setAnimation("Walk", lastAnimationsData.Walk) end
-                if lastAnimationsData.Run then setAnimation("Run", lastAnimationsData.Run) end
-                if lastAnimationsData.Jump then setAnimation("Jump", lastAnimationsData.Jump) end
-                if lastAnimationsData.Fall then setAnimation("Fall", lastAnimationsData.Fall) end
-                if lastAnimationsData.Climb then setAnimation("Climb", lastAnimationsData.Climb) end
-                if lastAnimationsData.Swim then setAnimation("Swim", lastAnimationsData.Swim) end
-                if lastAnimationsData.SwimIdle then setAnimation("SwimIdle", lastAnimationsData.SwimIdle) end
+                lastAnimations = lastAnimationsData
+                local char = LP.Character or LP.CharacterAdded:Wait()
+                char:WaitForChild("Animate", 10)
+                task.wait(0.5)
+                applyAllLastAnimations()
             end
         end
     end
@@ -1135,13 +1142,66 @@ task.wait(2)
         local animate = character:WaitForChild("Animate", 10)
         if not animate then return end
 
-        if lastAnimations.Walk then setAnimation("Walk", lastAnimations.Walk) end
-        if lastAnimations.Run then setAnimation("Run", lastAnimations.Run) end
-        if lastAnimations.Jump then setAnimation("Jump", lastAnimations.Jump) end
-        if lastAnimations.Fall then setAnimation("Fall", lastAnimations.Fall) end
-        if lastAnimations.Climb then setAnimation("Climb", lastAnimations.Climb) end
-        if lastAnimations.Swim then setAnimation("Swim", lastAnimations.Swim) end
-        if lastAnimations.SwimIdle then setAnimation("SwimIdle", lastAnimations.SwimIdle) end
+        task.wait(0.5)
+        applyAllLastAnimations()
+        task.wait(0.5)
+        applyAllLastAnimations()
+        task.wait(1)
+        applyAllLastAnimations()
+    end)
+
+    task.spawn(function()
+        while task.wait(2) do
+            local char = LP.Character
+            if not char then continue end
+            local animate = char:FindFirstChild("Animate")
+            if not animate then continue end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum then continue end
+
+            if lastAnimations.Walk and animate:FindFirstChild("walk") then
+                local wa = animate.walk:FindFirstChild("WalkAnim")
+                if wa and not wa.AnimationId:find(tostring(lastAnimations.Walk)) then
+                    setAnimation("Walk", lastAnimations.Walk)
+                end
+            end
+            if lastAnimations.Run and animate:FindFirstChild("run") then
+                local ra = animate.run:FindFirstChild("RunAnim")
+                if ra and not ra.AnimationId:find(tostring(lastAnimations.Run)) then
+                    setAnimation("Run", lastAnimations.Run)
+                end
+            end
+            if lastAnimations.Jump and animate:FindFirstChild("jump") then
+                local ja = animate.jump:FindFirstChild("JumpAnim")
+                if ja and not ja.AnimationId:find(tostring(lastAnimations.Jump)) then
+                    setAnimation("Jump", lastAnimations.Jump)
+                end
+            end
+            if lastAnimations.Fall and animate:FindFirstChild("fall") then
+                local fa = animate.fall:FindFirstChild("FallAnim")
+                if fa and not fa.AnimationId:find(tostring(lastAnimations.Fall)) then
+                    setAnimation("Fall", lastAnimations.Fall)
+                end
+            end
+            if lastAnimations.Climb and animate:FindFirstChild("climb") then
+                local ca = animate.climb:FindFirstChild("ClimbAnim")
+                if ca and not ca.AnimationId:find(tostring(lastAnimations.Climb)) then
+                    setAnimation("Climb", lastAnimations.Climb)
+                end
+            end
+            if lastAnimations.Swim and animate:FindFirstChild("swim") then
+                local sa = animate.swim:FindFirstChild("Swim")
+                if sa and not sa.AnimationId:find(tostring(lastAnimations.Swim)) then
+                    setAnimation("Swim", lastAnimations.Swim)
+                end
+            end
+            if lastAnimations.SwimIdle and animate:FindFirstChild("swimidle") then
+                local sia = animate.swimidle:FindFirstChild("SwimIdle")
+                if sia and not sia.AnimationId:find(tostring(lastAnimations.SwimIdle)) then
+                    setAnimation("SwimIdle", lastAnimations.SwimIdle)
+                end
+            end
+        end
     end)
 
     UserInputService.InputBegan:Connect(function(input, gameProcessed)
