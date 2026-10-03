@@ -1279,6 +1279,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if input.UserInputType == Enum.UserInputType.Keyboard then
             currentKeybind = input.KeyCode
             stopListening()
+            pcall(function()
+                writefile("GazeKeybind.json", HttpService:JSONEncode({key = currentKeybind.Name}))
+            end)
             Notify("Keybind", "Toggle key set to " .. keyName(currentKeybind), 2)
         end
         return
@@ -1286,6 +1289,21 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
     if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == currentKeybind then
         screenGui.Enabled = not screenGui.Enabled
+    end
+end)
+
+task.spawn(function()
+    if isfile("GazeKeybind.json") then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile("GazeKeybind.json"))
+        end)
+        if ok and data and data.key then
+            local kc = Enum.KeyCode[data.key]
+            if kc then
+                currentKeybind = kc
+                keybindBtn.Text = "KEY: " .. kc.Name
+            end
+        end
     end
 end)
 
@@ -1483,4 +1501,84 @@ Notify("PLEASE", "Donate me, im poor :(", 1)
 local lt = os.clock() - st
 Notify("loaded", string.format("in %.2f seconds.", lt), 5)
 Notify("small Anim Update", "Ah yes. fresh anims and RTHRO", 20)
+end)
+
+-- ============================================================
+-- EVENT FARM (sin UI, solo keybind guardable)
+-- ============================================================
+pcall(function()
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local HttpService = game:GetService("HttpService")
+    local LocalPlayer = Players.LocalPlayer
+
+    local FARM_KEY_FILE = "EventFarmKeybind.json"
+    local farmKey = Enum.KeyCode.RightControl
+    local farmEnabled = true
+    local farmAccumulator = 0
+    local farmInterval = 0.3
+    local farmConn = nil
+    local listeningFarmKey = false
+
+    if isfile(FARM_KEY_FILE) then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(FARM_KEY_FILE))
+        end)
+        if ok and data and data.key then
+            local kc = Enum.KeyCode[data.key]
+            if kc then farmKey = kc end
+        end
+    end
+
+    local function saveFarmKey()
+        pcall(function()
+            writefile(FARM_KEY_FILE, HttpService:JSONEncode({key = farmKey.Name}))
+        end)
+    end
+
+    local function getSpawnables()
+        return workspace:FindFirstChild("SpawnablesClient")
+    end
+
+    local function fireTouchOnSpawnables(character)
+        if type(firetouchinterest) ~= "function" or not character then return end
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local s = getSpawnables()
+        if not s then return end
+        for _, spawnable in ipairs(s:GetChildren()) do
+            local touchPart = spawnable:FindFirstChild("Touch", true)
+            if touchPart and touchPart:IsA("BasePart") then
+                pcall(function()
+                    firetouchinterest(hrp, touchPart, 0)
+                    firetouchinterest(hrp, touchPart, 1)
+                end)
+            end
+        end
+    end
+
+    local function startFarm()
+        if farmConn then farmConn:Disconnect() end
+        farmAccumulator = 0
+        farmConn = RunService.Heartbeat:Connect(function(dt)
+            if not farmEnabled then return end
+            farmAccumulator = farmAccumulator + dt
+            if farmAccumulator < farmInterval then return end
+            farmAccumulator = 0
+            local char = LocalPlayer.Character
+            if char then fireTouchOnSpawnables(char) end
+        end)
+    end
+
+    startFarm()
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if input.KeyCode == farmKey then
+            farmEnabled = not farmEnabled
+            print("[Event Farm] Auto-farm:", farmEnabled and "ON" or "OFF")
+        end
+    end)
 end)
